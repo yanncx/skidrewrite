@@ -2754,8 +2754,10 @@ run(function()
         uar.AspectType = Enum.AspectType.FitWithinMaxSize
         uar.DominantAxis = Enum.DominantAxis.Width
         uar.Parent = icon
-		local kit = plr:GetAttribute("PlayingAsKit")
-		icon.Image = kitImageIds[kit] or kitImageIds["none"]
+		local kit = plr:GetAttribute("PlayingAsKits")
+		local meta = bedwars.BedwarsKitMeta and (bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none)
+        local newImage = (meta and meta.renderImage) or kitImageIds[kit] or kitImageIds["none"]
+		icon.Image = newImage
         return icon
     end
 
@@ -2779,7 +2781,7 @@ run(function()
 
     local function refreshicon(icon, plr)
         if not icon or not icon.Parent then return end
-        local kit = plr:GetAttribute("PlayingAsKit")
+        local kit = plr:GetAttribute("PlayingAsKits")
         local meta = bedwars.BedwarsKitMeta and (bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none)
         local newImage = (meta and meta.renderImage) or kitImageIds[kit] or kitImageIds["none"]
         if icon.Image ~= newImage then
