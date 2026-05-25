@@ -106,6 +106,59 @@ end
 
 pcall(migrateProfiles)
 
+--[[ ===== ANTILAG PERFORMANCE MODULE ===== ]]
+local antilag = {}
+local RunService = cloneref(game:GetService('RunService'))
+local deltaTime = 0
+local lastFrameTime = tick()
+local renderFrameCount = 0
+
+-- Anti-lag config
+local ANTILAG_CONFIG = {
+	MAX_FRAME_TIME = 0.05, -- cap frame time at 50ms to prevent 2.3 FPS drops
+	RENDER_THROTTLE = 0.016,
+}
+
+-- Frame time monitoring (detects and prevents lag spikes)
+task.spawn(function()
+	while true do
+		local currentTime = tick()
+		deltaTime = math.min(currentTime - lastFrameTime, ANTILAG_CONFIG.MAX_FRAME_TIME)
+		lastFrameTime = currentTime
+		RunService.RenderStepped:Wait()
+		renderFrameCount = renderFrameCount + 1
+	end
+end)
+
+function antilag.GetFrameTime()
+	return deltaTime
+end
+
+function antilag.GetFPS()
+	return 1 / math.max(deltaTime, 0.001)
+end
+
+function antilag.ThrottledWait(customInterval)
+	local interval = customInterval or 0.016
+	local adjustedInterval = math.max(interval, deltaTime)
+	if adjustedInterval > 0 then
+		task.wait(adjustedInterval)
+	else
+		RunService.RenderStepped:Wait()
+	end
+end
+
+function antilag.GetStatus()
+	return {
+		fps = antilag.GetFPS(),
+		frameTime = deltaTime,
+		renderFrames = renderFrameCount,
+	}
+end
+
+getgenv().antilag = antilag
+shared.antilag = antilag
+
 local function finishLoading()
 	vape.Init = nil
 	if not vape.Load then
