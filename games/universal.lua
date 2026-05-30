@@ -2443,7 +2443,7 @@ run(function()
 						entitylib.character.RootPart.CFrame = CFrame.lookAt(entitylib.character.RootPart.Position, Vector3.new(vec.X, entitylib.character.RootPart.Position.Y + 0.01, vec.Z))
 					end
 	
-					task.wait()
+					task.wait(1 / 60)
 				until not Killaura.Enabled
 			else
 				for _, v in Boxes do
@@ -3784,7 +3784,13 @@ run(function()
 				Arrows:Clean(vape.Categories.Friends.ColorUpdate.Event:Connect(function()
 					ColorFunc(Color.Hue, Color.Sat, Color.Value)
 				end))
-				Arrows:Clean(runService.RenderStepped:Connect(Loop))
+				local arrowLoopElapsed = 0
+				Arrows:Clean(runService.RenderStepped:Connect(function(dt)
+					arrowLoopElapsed += dt
+					if arrowLoopElapsed < (1 / 30) then return end
+					arrowLoopElapsed = 0
+					Loop()
+				end))
 			else
 				for i in Reference do
 					Removed(i)
@@ -4474,7 +4480,13 @@ run(function()
 					end))
 				end
 				if ESPLoop[methodused] then
-					ESP:Clean(runService.RenderStepped:Connect(ESPLoop[methodused]))
+					local espLoopElapsed = 0
+					ESP:Clean(runService.RenderStepped:Connect(function(dt)
+						espLoopElapsed += dt
+						if espLoopElapsed < (1 / 30) then return end
+						espLoopElapsed = 0
+						ESPLoop[methodused]()
+					end))
 				end
 			else
 				if ESPRemoved[methodused] then
@@ -5184,7 +5196,13 @@ run(function()
 					end))
 				end
 				if Loop[methodused] then
-					NameTags:Clean(runService.RenderStepped:Connect(Loop[methodused]))
+					local nametagLoopElapsed = 0
+					NameTags:Clean(runService.RenderStepped:Connect(function(dt)
+						nametagLoopElapsed += dt
+						if nametagLoopElapsed < (1 / 30) then return end
+						nametagLoopElapsed = 0
+						Loop[methodused]()
+					end))
 				end
 			else
 				if Removed[methodused] then
@@ -5504,11 +5522,15 @@ run(function()
 						dot.BackgroundColor3 = entitylib.getEntityColor(ent) or Color3.fromHSV(PlayerColor.Hue, PlayerColor.Sat, PlayerColor.Value)
 					end
 				end))
-				Radar:Clean(runService.RenderStepped:Connect(function()
+				local radarLoopElapsed = 0
+				Radar:Clean(runService.RenderStepped:Connect(function(dt)
+					radarLoopElapsed += dt
+					if radarLoopElapsed < (1 / 30) then return end
+					radarLoopElapsed = 0
 					for ent, dot in Reference do
 						if entitylib.isAlive then
-							local dt = CFrame.lookAlong(entitylib.character.RootPart.Position, gameCamera.CFrame.LookVector * Vector3.new(1, 0, 1)):PointToObjectSpace(ent.RootPart.Position)
-							dot.Position = UDim2.fromOffset(Clamp.Enabled and math.clamp(108 + dt.X, 2, 214) or 108 + dt.X, Clamp.Enabled and math.clamp(108 + dt.Z, 8, 214) or 108 + dt.Z)
+							local relative = CFrame.lookAlong(entitylib.character.RootPart.Position, gameCamera.CFrame.LookVector * Vector3.new(1, 0, 1)):PointToObjectSpace(ent.RootPart.Position)
+							dot.Position = UDim2.fromOffset(Clamp.Enabled and math.clamp(108 + relative.X, 2, 214) or 108 + relative.X, Clamp.Enabled and math.clamp(108 + relative.Z, 8, 214) or 108 + relative.Z)
 						end
 					end
 				end))
@@ -5987,7 +6009,13 @@ run(function()
 				Tracers:Clean(vape.Categories.Friends.ColorUpdate.Event:Connect(function()
 					ColorFunc(Color.Hue, Color.Sat, Color.Value)
 				end))
-				Tracers:Clean(runService.RenderStepped:Connect(Loop))
+				local tracerLoopElapsed = 0
+				Tracers:Clean(runService.RenderStepped:Connect(function(dt)
+					tracerLoopElapsed += dt
+					if tracerLoopElapsed < (1 / 30) then return end
+					tracerLoopElapsed = 0
+					Loop()
+				end))
 			else
 				for i in Reference do
 					Removed(i)
@@ -8661,5 +8689,3 @@ run(function()
 		Tooltip = "God rays effect through objects"
 	})
 end)
-
-
