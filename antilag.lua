@@ -17,55 +17,74 @@ local CONFIG = {
 	OPTIMAL_FRAMETIME = 1/60, -- 60 FPS target
 	HTTP_REQUEST_DEBOUNCE = 0.5, -- seconds
 	LOOP_THROTTLE_INTERVAL = 0.016, -- ~60 FPS
-	MEMORY_CHECK_INTERVAL = 5, -- seconds
+	MEMORY_CHECK_INTERVAL = 15, -- seconds
 	MAX_PENDING_REQUESTS = 3,
 	RENDER_THROTTLE = 0.016, -- throttle excessive renders
 	MAX_FRAME_TIME = 0.05, -- cap frame time at 50ms
-	GC_COLLECTION_INTERVAL = 60, -- incremented to 60 seconds
+	GC_COLLECTION_INTERVAL = 120,
 	INCREMENTAL_GC = true, -- use incremental garbage collection
 }
 
 -- Internal state
-local lastHttpTime = 0
-local pendingHttpRequests = 0
-local deltaTime = 0
-local lastFrameTime = tick()
-local gcCollectInterval = 0
-local lastRenderTime = 0
-local renderFrameCount = 0
+local state = shared.R12SAStandaloneAntilagState or {
+	pendingHttpRequests = 0,
+	deltaTime = 0,
+	lastFrameTime = tick(),
+	gcCollectInterval = 0,
+	renderFrameCount = 0,
+	running = false,
+	maintenanceRunning = false
+}
+shared.R12SAStandaloneAntilagState = state
 
 -- Cache for repeated file operations
 local fileCache = {}
+local fileCacheCount = 0
 local fileCacheMaxSize = 50
+
+local function setCacheEntry(key, data)
+	if fileCache[key] == nil then
+		fileCacheCount = fileCacheCount + 1
+	end
+	fileCache[key] = {data = data, timestamp = tick()}
+end
+
+local function removeCacheEntry(key)
+	if fileCache[key] ~= nil then
+		fileCache[key] = nil
+		fileCacheCount = math.max(fileCacheCount - 1, 0)
+	end
+end
 
 --[[ ===== PERFORMANCE MONITORING ===== ]]
 
 function antilag.GetFrameTime()
-	return deltaTime
+	return state.deltaTime
 end
 
 function antilag.GetFPS()
-	return 1 / math.max(deltaTime, 0.001)
+	return 1 / math.max(state.deltaTime, 0.001)
 end
 
 -- Monitor frame times to detect lag - IMPROVED version
-task.spawn(function()
-	while true do
-		local currentTime = tick()
-		deltaTime = math.min(currentTime - lastFrameTime, CONFIG.MAX_FRAME_TIME)
-		lastFrameTime = currentTime
-		RunService.RenderStepped:Wait()
-		renderFrameCount = renderFrameCount + 1
-	end
-end)
+if not state.running then
+	state.running = true
+	task.spawn(function()
+		while state.running do
+			local currentTime = tick()
+			state.deltaTime = math.min(currentTime - state.lastFrameTime, CONFIG.MAX_FRAME_TIME)
+			state.lastFrameTime = currentTime
+			RunService.RenderStepped:Wait()
+			state.renderFrameCount = state.renderFrameCount + 1
+		end
+	end)
+end
 
 --[[ ===== HTTP REQUEST OPTIMIZATION ===== ]]
 
 function antilag.HttpGet(url, noCache)
-	-- Check if we're already at max pending requests
-	if pendingHttpRequests >= CONFIG.MAX_PENDING_REQUESTS then
+	while state.pendingHttpRequests >= CONFIG.MAX_PENDING_REQUESTS do
 		task.wait(0.1)
-		return antilag.HttpGet(url, noCache)
 	end
 
 	local cache = fileCache[url]
@@ -73,12 +92,17 @@ function antilag.HttpGet(url, noCache)
 		return cache.data
 	end
 
-	pendingHttpRequests = pendingHttpRequests + 1
-	local result = game:HttpGet(url)
-	pendingHttpRequests = pendingHttpRequests - 1
+	state.pendingHttpRequests = state.pendingHttpRequests + 1
+	local success, result = pcall(function()
+		return game:HttpGet(url)
+	end)
+	state.pendingHttpRequests = math.max(state.pendingHttpRequests - 1, 0)
+	if not success then
+		error(result)
+	end
 	
 	if result then
-		fileCache[url] = {data = result, timestamp = tick()}
+		setCacheEntry(url, result)
 	end
 
 	return result
@@ -101,12 +125,12 @@ function antilag.ReadFileOptimized(path)
 			fileCache[path].data = result
 			fileCache[path].timestamp = tick()
 		else
-			if #fileCache >= fileCacheMaxSize then
+			if fileCacheCount >= fileCacheMaxSize then
 				-- Remove oldest cache entry
 				local oldestKey = next(fileCache)
-				fileCache[oldestKey] = nil
+				removeCacheEntry(oldestKey)
 			end
-			fileCache[path] = {data = result, timestamp = tick()}
+			setCacheEntry(path, result)
 		end
 		return result
 	end
@@ -121,7 +145,7 @@ function antilag.WriteFileOptimized(path, content)
 	
 	if success then
 		-- Update cache
-		fileCache[path] = {data = content, timestamp = tick()}
+		setCacheEntry(path, content)
 	else
 		warn('[ANTILAG] Write file failed: ' .. tostring(err))
 	end
@@ -135,7 +159,7 @@ function antilag.ThrottledWait(customInterval)
 	local interval = customInterval or CONFIG.LOOP_THROTTLE_INTERVAL
 	
 	-- Adaptive wait based on current frame time
-	local adjustedInterval = math.max(interval, deltaTime)
+	local adjustedInterval = math.max(interval, state.deltaTime)
 	if adjustedInterval > 0 then
 		task.wait(adjustedInterval)
 	else
@@ -161,34 +185,33 @@ end
 --[[ ===== MEMORY OPTIMIZATION ===== ]]
 
 function antilag.OptimizeMemory()
-	-- Use incremental garbage collection to avoid frame spikes
-	if CONFIG.INCREMENTAL_GC then
-		collectgarbage('step', 100) -- Incremental step instead of full collection
-	else
-		collectgarbage('collect')
-	end
-	
 	-- Limit file cache size
-	if #fileCache > fileCacheMaxSize * 1.5 then
+	if fileCacheCount > fileCacheMaxSize * 1.5 then
 		fileCache = {}
+		fileCacheCount = 0
+		-- Tiny incremental step only after dropping cached data. Full collection caused repeated frame spikes.
+		if CONFIG.INCREMENTAL_GC then
+			collectgarbage('step', 16)
+		end
 	end
 end
 
--- Periodic garbage collection - IMPROVED: Spreads GC work over time
-task.spawn(function()
-	while true do
-		task.wait(CONFIG.MEMORY_CHECK_INTERVAL)
-		gcCollectInterval = gcCollectInterval + CONFIG.MEMORY_CHECK_INTERVAL
-		
-		if gcCollectInterval >= CONFIG.GC_COLLECTION_INTERVAL then
-			-- Schedule GC in a separate thread to avoid blocking render
-			task.delay(0.05, function()
+-- Periodic cache maintenance. GC only gets a tiny step after cache pressure is relieved.
+if not state.maintenanceRunning then
+	state.maintenanceRunning = true
+	task.spawn(function()
+		while state.running do
+			task.wait(CONFIG.MEMORY_CHECK_INTERVAL)
+			state.gcCollectInterval = state.gcCollectInterval + CONFIG.MEMORY_CHECK_INTERVAL
+			
+			if state.gcCollectInterval >= CONFIG.GC_COLLECTION_INTERVAL then
 				antilag.OptimizeMemory()
-			end)
-			gcCollectInterval = 0
+				state.gcCollectInterval = 0
+			end
 		end
-	end
-end)
+		state.maintenanceRunning = false
+	end)
+end
 
 --[[ ===== EVENT OPTIMIZATION ===== ]]
 
@@ -247,10 +270,10 @@ end
 function antilag.GetStatus()
 	return {
 		fps = antilag.GetFPS(),
-		frameTime = deltaTime,
-		pendingRequests = pendingHttpRequests,
-		cachedFiles = #fileCache,
-		renderFrames = renderFrameCount,
+		frameTime = state.deltaTime,
+		pendingRequests = state.pendingHttpRequests,
+		cachedFiles = fileCacheCount,
+		renderFrames = state.renderFrameCount,
 	}
 end
 
@@ -263,8 +286,10 @@ end
 
 function antilag.Cleanup()
 	fileCache = {}
-	renderFrameCount = 0
-	collectgarbage('collect')
+	fileCacheCount = 0
+	state.renderFrameCount = 0
+	state.running = false
+	state.maintenanceRunning = false
 end
 
 return antilag
