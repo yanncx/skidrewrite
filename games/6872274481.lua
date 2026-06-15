@@ -12340,7 +12340,6 @@ run(function()
 	local Range
 	local BreakSpeed
 	local UpdateRate
-	local Custom
 	local Bed
 	local LuckyBlock
 	local IronOre
@@ -12356,20 +12355,38 @@ run(function()
 	local LimitItem
 	local AutoTool
 	local MouseDown
+	local Snow
 	local YetiBreaker
 	local RagnarBreaker
 	local ShowPath
+	local BreakClosest
 	local BlockHighlight
 	local BreakerHighlightColor
+	local BreakerAngle
 	local blockHighlightInstance
 	local frozenBlockPositions = {}
-	local customlist, parts = {}, {}
+	local parts = {}
 	local lastTier4Break = 0
 	local tierTeamIds = { tier99 = {}, tier4 = {} }
 	local lastTierCacheUpdate = 0
 	local hit = 0
 	local cachedTeammates = {}
 	local cachedTeammatesTime = 0
+	local breakabilityCache = {}
+	local BREAK_CACHE_TTL = 0.5
+
+	local function cachedIsBreakable(v)
+		local now = tick()
+		local cached = breakabilityCache[v]
+		if cached and (now - cached.t) < BREAK_CACHE_TTL then
+			return cached.v
+		end
+		local blockPos = bedwars.BlockController:getBlockPosition(v.Position)
+		local ok, result = pcall(bedwars.BlockController.isBlockBreakable, bedwars.BlockController, {blockPosition = blockPos}, lplr)
+		local val = ok and result
+		breakabilityCache[v] = {v = val, t = now}
+		return val
+	end
 
 	local function updateTierTeamCache()
 		local now = tick()
@@ -12380,8 +12397,8 @@ run(function()
 		table.clear(tierTeamIds.tier4)
 
 		for _, player in playersService:GetPlayers() do
-			local tier = getAccountTier(player)
-			if tier >= 99 then
+			local tier = 0
+			if false then
 				local teamId = player.Character and (player.Character:GetAttribute('Team') or player.Character:GetAttribute('TeamId'))
 				if teamId then
 					tierTeamIds.tier99[tonumber(teamId)] = true
@@ -12416,7 +12433,7 @@ run(function()
 		if userId then
 			local success, player = pcall(playersService.GetPlayerByUserId, playersService, userId)
 			if success and player then
-				return getAccountTier(player)
+				return 0
 			end
 		end
 		
@@ -12544,10 +12561,10 @@ run(function()
 	end
 
 	local function passesChecks(v)
-		local placerTier = getPlacerTier(v)
-		local myTier = getAccountTier(lplr)
+		local placerTier = 0
+		local myTier = 0
 
-		if placerTier >= 99 and myTier <= 4 then
+		if false then
 			return false  
 		end
 
@@ -12611,10 +12628,12 @@ run(function()
 				replicatedStorage:WaitForChild("events-@easy-games/game-core:shared/game-core-networking@getEvents.Events"):WaitForChild("useAbility"):FireServer("berserker_rage")
 			end
 		end
-		local target, path, endpos = bedwars.breakBlock(v, Effect.Enabled, Animation.Enabled, wrappedHealthbar, InstantBreak.Enabled or AutoTool.Enabled)
+		if BreakClosest and BreakClosest.Enabled then bedwars.breakClosestMode = true end
+		local target, path, endpos = bedwars.breakBlock(v, Effect.Enabled, Animation.Enabled, wrappedHealthbar, (InstantBreak.Enabled or AutoTool.Enabled) and LimitItem.Enabled)
+		bedwars.breakClosestMode = false
 		if path and ShowPath and ShowPath.Enabled then
-			local placerTier = getPlacerTier(v)
-			if placerTier == 4 and placerTier < 99 and getAccountTier(lplr) == 0 then
+			local placerTier = 0
+			if false then
 				task.wait(0.65 + math.random() * 0.4)  
 			end
 			local currentnode = target
@@ -12649,7 +12668,7 @@ run(function()
 		if distance < 3 then return nil end
 		dir = dir.Unit
 		local checked = {}
-		local step = 1.5
+		local step = 3
 		for i = step, distance - step, step do
 			local checkPos = roundPos(playerPos + dir * i)
 			local key = checkPos.X .. ',' .. checkPos.Y .. ',' .. checkPos.Z
@@ -12739,9 +12758,7 @@ run(function()
 			local dist = (v.Position - localPosition).Magnitude
 			if dist >= Range.Value or dist >= bestDist then continue end
 			if not skipBreakCheck and v.Name ~= 'bed' then
-				local blockPos = bedwars.BlockController:getBlockPosition(v.Position)
-				local ok, canBreak = pcall(function() return bedwars.BlockController:isBlockBreakable({blockPosition = blockPos}, lplr) end)
-				if not (ok and canBreak) then continue end
+				if not cachedIsBreakable(v) then continue end
 			end
 			if not passesChecks(v) then continue end
 			best = v
@@ -12761,8 +12778,8 @@ run(function()
 			if v and v:IsA('BasePart') and table.find(names, v.Name) then
 				local dist = (v.Position - localPosition).Magnitude
 				if dist < Range.Value and dist < bestDist then
-					if bedwars.BlockController:isBlockBreakable({blockPosition = bedwars.BlockController:getBlockPosition(v.Position)}, lplr) then
-						if passesChecks(v) then
+					if cachedIsBreakable(v) and passesChecks(v) then
+						if true then
 							best = v
 							bestDist = dist
 						end
@@ -12810,31 +12827,38 @@ run(function()
 				local beds = collection('bed', Breaker)
 				local luckyblock = collection('LuckyBlock', Breaker)
 				local ironores = collection('iron_ore_mesh_block', Breaker)
-				customlist = collection('block', Breaker, function(tab, obj)
-					if table.find(Custom.ListEnabled, obj.Name) then
-						table.insert(tab, obj)
-					end
-				end)
 
-			local trackedSpecial = {tesla_trap={}, beehive={}, pinata={}, carrot={}, melon={}, pumpkin={}} 
-			local _trackedNames = {tesla_trap = true, beehive = true, pinata = true, carrot = true, melon = true, pumpkin = true}
+				local trackedSpecial = {tesla_trap={}, beehive={}, pinata={}, carrot={}, melon={}, pumpkin={}, snow_pile={}} 
+				local _trackedNames = {tesla_trap = true, beehive = true, pinata = true, carrot = true, melon = true, pumpkin = true, snow_pile = true}
 
 			local function trackAdd(obj)
 				if not _trackedNames[obj.Name] then return end
-				if not obj:IsA('BasePart') then return end
 				local t = trackedSpecial[obj.Name]
 				if not t then return end
-				table.insert(t, obj)
+				if obj:IsA('BasePart') then
+					table.insert(t, obj)
+				elseif obj:IsA('Model') then
+					local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart')
+					if part then table.insert(t, part) end
+				end
 			end
 
 			local function trackRemove(obj)
 				if not _trackedNames[obj.Name] then return end
-				if not obj:IsA('BasePart') then return end
 				local t = trackedSpecial[obj.Name]
 				if t then
-					local i = table.find(t, obj)
-					if i then table.remove(t, i) end
+					if obj:IsA('BasePart') then
+						local i = table.find(t, obj)
+						if i then table.remove(t, i) end
+					elseif obj:IsA('Model') then
+						local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart')
+						if part then
+							local i = table.find(t, part)
+							if i then table.remove(t, i) end
+						end
+					end
 				end
+				breakabilityCache[obj] = nil
 			end
 
 			for _, obj in workspace:GetDescendants() do trackAdd(obj) end
@@ -12872,22 +12896,28 @@ run(function()
 								local dist = (v.Position - localPosition).Magnitude
 								if dist >= Range.Value or dist >= bestDist then continue end
 								if not skip and v.Name ~= 'bed' then
-									local blockPos = bedwars.BlockController:getBlockPosition(v.Position)
-									_blockPosArg.blockPosition = blockPos
-									local ok, canBreak = pcall(bedwars.BlockController.isBlockBreakable, bedwars.BlockController, _blockPosArg, lplr)
-									if not (ok and canBreak) then continue end
+									if not cachedIsBreakable(v) then continue end
 								end
 								if not passesChecks(v) then continue end
+								if BreakerAngle and BreakerAngle.Value < 360 then
+									local hrp = entitylib.character and entitylib.character.RootPart
+									if hrp then
+										local toBlock = (v.Position - hrp.Position).Unit
+										local dot = hrp.CFrame.LookVector:Dot(toBlock)
+										local angleToBlock = math.deg(math.acos(math.clamp(dot, -1, 1)))
+										if angleToBlock > BreakerAngle.Value / 2 then continue end
+									end
+								end
 								best = v
 								bestDist = dist
 							end
 						end
 						eval(Bed.Enabled and beds, true)
 						if not best then
-							eval(customlist)
 							eval(LuckyBlock.Enabled and luckyblock, true)
 							eval(IronOre.Enabled and ironores, true)
 							eval(Tesla and Tesla.Enabled and trackedSpecial.tesla_trap, true)
+							eval(Snow and Snow.Enabled and trackedSpecial.snow_pile, true)
 							eval(Hive and Hive.Enabled and trackedSpecial.beehive)
 							eval(Pinata and Pinata.Enabled and trackedSpecial.pinata, true)
 							if Crops and Crops.Enabled then
@@ -12899,7 +12929,25 @@ run(function()
 					
 						if best then
 							if not MouseDown or not MouseDown.Enabled or inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-								doBreak(best, false)
+								if BreakClosest and BreakClosest.Enabled then
+									local underBlock = getPlacedBlock(roundPos(localPosition - Vector3.new(0, 3, 0)))
+									if underBlock and underBlock ~= best and passesChecks(underBlock) then
+										local bpos = bedwars.BlockController:getBlockPosition(underBlock.Position)
+										local ok, canBreak = pcall(bedwars.BlockController.isBlockBreakable, bedwars.BlockController, {blockPosition = bpos}, lplr)
+										if ok and canBreak then
+											doBreak(underBlock, true)
+											continue
+										end
+									end
+									local pathBlock = findPathBlock(best.Position, localPosition)
+									if pathBlock then
+										doBreak(pathBlock, true)
+									else
+										doBreak(best, false)
+									end
+								else
+									doBreak(best, false)
+								end
 								continue
 							end
 						end
@@ -12913,6 +12961,7 @@ run(function()
 					end
 				until not Breaker.Enabled
 			else
+				table.clear(breakabilityCache)
 				if blockHighlightInstance then
 					blockHighlightInstance:Destroy()
 					blockHighlightInstance = nil
@@ -12951,18 +13000,6 @@ run(function()
 		Default = 60,
 		Suffix = 'hz'
 	})
-	Custom = Breaker:CreateTextList({
-		Name = 'Custom',
-		Function = function()
-			if not customlist then return end
-			table.clear(customlist)
-			for _, obj in store.blocks do
-				if table.find(Custom.ListEnabled, obj.Name) then
-					table.insert(customlist, obj)
-				end
-			end
-		end
-	})
 	Bed = Breaker:CreateToggle({
 		Name = 'Break Bed',
 		Default = true
@@ -12974,6 +13011,10 @@ run(function()
 	IronOre = Breaker:CreateToggle({
 		Name = 'Break Iron Ore',
 		Default = true
+	})
+	Snow = Breaker:CreateToggle({
+		Name = 'Break Snow',
+		Default = false
 	})
 	Tesla = Breaker:CreateToggle({
 		Name = 'Break Tesla',
@@ -13029,6 +13070,11 @@ run(function()
 		Name = 'Ragnar',
 		Tooltip = 'pops the ragnar ability whenever nuking'
 	})
+	BreakClosest = Breaker:CreateToggle({
+		Name = 'Break Closest',
+		Default = false,
+		Tooltip = 'Prioritizes breaking blocks closest to your character instead of the optimal path'
+	})
 	ShowPath = Breaker:CreateToggle({
 		Name = 'Show Path',
 		Default = true,
@@ -13052,6 +13098,7 @@ run(function()
 					blockHighlightInstance.Parent = gameCamera
 				end
 			else
+				table.clear(breakabilityCache)
 				if blockHighlightInstance then
 					blockHighlightInstance:Destroy()
 					blockHighlightInstance = nil
@@ -13071,6 +13118,14 @@ run(function()
 				blockHighlightInstance.Color3 = Color3.fromHSV(hue, sat, val)
 			end
 		end
+	})
+
+	BreakerAngle = Breaker:CreateSlider({
+		Name = 'Break Angle',
+		Min = 0,
+		Max = 360,
+		Default = 360,
+		Tooltip = 'only break blocks within this angle of your look direction 360 = all directions'
 	})
 
 	task.defer(function()
