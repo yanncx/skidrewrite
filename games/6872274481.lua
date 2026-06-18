@@ -44966,3 +44966,80 @@ run(function()
 		Default = true
 	})
 end)
+
+run(function()
+	local TeamUpgradeTierBypass
+	local originalValues = {}
+	local nilValue = {}
+	local unlockKeys = {
+		'availableOnlyInQueue',
+		'disabledInQueue',
+		'disabled',
+		'hidden',
+		'hideInShop',
+		'locked',
+		'tiered',
+		'nextTier',
+		'require',
+		'requires',
+		'required',
+		'requiredUpgrade',
+		'requiredTeamUpgrade',
+		'requiredQueue',
+		'requiredQueueTypes',
+		'requiredGameMode'
+	}
+
+	local function saveValue(tbl, key)
+		originalValues[tbl] = originalValues[tbl] or {}
+		if originalValues[tbl][key] == nil then
+			local value = rawget(tbl, key)
+			originalValues[tbl][key] = value == nil and nilValue or value
+		end
+	end
+
+	local function unlockTable(tbl)
+		if type(tbl) ~= 'table' then return end
+
+		for _, key in unlockKeys do
+			if rawget(tbl, key) ~= nil then
+				saveValue(tbl, key)
+				tbl[key] = nil
+			end
+		end
+	end
+
+	local function applyBypass()
+		for _, upgrade in pairs(bedwars.TeamUpgradeMeta or {}) do
+			unlockTable(upgrade)
+
+			for _, tier in pairs(upgrade.tiers or {}) do
+				unlockTable(tier)
+			end
+		end
+	end
+
+	local function restoreBypass()
+		for tbl, values in pairs(originalValues) do
+			if type(tbl) == 'table' then
+				for key, value in pairs(values) do
+					tbl[key] = value == nilValue and nil or value
+				end
+			end
+		end
+		table.clear(originalValues)
+	end
+
+	TeamUpgradeTierBypass = vape.Categories.Utility:CreateModule({
+		Name = 'TeamUpgradeTierBypass',
+		Function = function(callback)
+			if callback then
+				applyBypass()
+				TeamUpgradeTierBypass:Clean(runService.Heartbeat:Connect(applyBypass))
+			else
+				restoreBypass()
+			end
+		end,
+		Tooltip = 'Removes local team-upgrade tier and queue locks'
+	})
+end)
