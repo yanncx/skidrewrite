@@ -12246,6 +12246,10 @@ end
 -- Full modified breaker module with WallCheck (raycast line-of-sight) and
 -- automatic "break blocking block first" behavior for beds when enclosed.
 
+-- Full modified breaker module with WallCheck (raycast line-of-sight) and
+-- automatic "break blocking block first" behavior for beds when enclosed.
+-- Fixed to avoid goto/label/continue syntax issues.
+
 run(function()
 	local Breaker
 	local Range
@@ -12772,7 +12776,6 @@ run(function()
 		-- If not found by position, try to find an ancestor of the hit instance that is a tracked placed block
 		local inst = rayResult.Instance
 		while inst and inst ~= workspace do
-			-- Some placed blocks may be direct BaseParts; check if it matches a stored block in store.blocks by proximity
 			if inst:IsA('BasePart') then
 				local check = getPlacedBlock(roundPos(inst.Position))
 				if check and check.Parent then
@@ -12790,37 +12793,66 @@ run(function()
 		if MouseDown and MouseDown.Enabled and not inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return false end
 		local best, bestDist = nil, math.huge
 		for _, v in tab do
-			local dist = (v.Position - localPosition).Magnitude
-			if dist >= Range.Value or dist >= bestDist then continue end
-			if not skipBreakCheck and v.Name ~= 'bed' then
-				if not cachedIsBreakable(v) then continue end
-			end
-			-- New: wall check / line-of-sight
-			if WallCheck and WallCheck.Enabled then
-				if not hasLineOfSight(v) then
-					-- If the target is a bed, try to find a blocking placed block and prefer that
-					if v.Name == 'bed' then
-						local blocker = findBlockingPlacedBlock(v)
-						if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
-							local bdist = (blocker.Position - localPosition).Magnitude
-							if bdist < bestDist and bdist < Range.Value then
-								best = blocker
-								bestDist = bdist
+			if not v or not v.Parent then
+				-- skip invalid
+			else
+				local dist = (v.Position - localPosition).Magnitude
+				if dist < Range.Value and dist < bestDist then
+					if not skipBreakCheck and v.Name ~= 'bed' then
+						if not cachedIsBreakable(v) then
+							-- skip
+						else
+							-- wall check
+							local accept = true
+							local replacedByBlocker = false
+							if WallCheck and WallCheck.Enabled and not hasLineOfSight(v) then
+								if v.Name == 'bed' then
+									local blocker = findBlockingPlacedBlock(v)
+									if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
+										local bdist = (blocker.Position - localPosition).Magnitude
+										if bdist < bestDist and bdist < Range.Value then
+											best = blocker
+											bestDist = bdist
+											replacedByBlocker = true
+											accept = false -- we've chosen blocker directly
+										else
+											accept = false
+										end
+									else
+										accept = false
+									end
+								else
+									accept = false
+								end
+							end
+							if accept and passesChecks(v) then
+								best = v
+								bestDist = dist
+							end
+							-- if replacedByBlocker then we already set best to the blocker
+						end
+					else
+						-- skipBreakCheck path / or bed bypass
+						if WallCheck and WallCheck.Enabled and not hasLineOfSight(v) then
+							-- if bed, attempt blocker
+							if v.Name == 'bed' then
+								local blocker = findBlockingPlacedBlock(v)
+								if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
+									local bdist = (blocker.Position - localPosition).Magnitude
+									if bdist < bestDist and bdist < Range.Value then
+										best = blocker
+										bestDist = bdist
+									end
+								end
+							end
+						else
+							if passesChecks(v) then
+								best = v
+								bestDist = dist
 							end
 						end
 					end
-					-- otherwise skip
-					if best ~= nil then
-						-- continue searching (we set best if we found a blocker)
-					else
-						continue
-					end
 				end
-			end
-			if not passesChecks(v) then continue end
-			if best == nil or dist < bestDist then
-				best = v
-				bestDist = dist
 			end
 		end
 		if not best then return false end
@@ -12838,9 +12870,9 @@ run(function()
 				local dist = (v.Position - localPosition).Magnitude
 				if dist < Range.Value and dist < bestDist then
 					if cachedIsBreakable(v) and passesChecks(v) then
-						-- New: wall check
+						local accept = true
 						if WallCheck and WallCheck.Enabled and not hasLineOfSight(v) then
-							-- If it's a bed (or named as bed-like), try find blocking placed block in front and pick that
+							-- If it's a bed, try find blocking placed block in front and pick that
 							if v.Name == 'bed' then
 								local blocker = findBlockingPlacedBlock(v)
 								if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
@@ -12849,19 +12881,17 @@ run(function()
 										best = blocker
 										bestDist = bdist
 									end
-									-- prefer the blocker instead of the bed until broken
-									goto continue_outer
 								end
 							end
-							-- otherwise skip this v
-							goto continue_outer
+							accept = false
 						end
-						best = v
-						bestDist = dist
+						if accept then
+							best = v
+							bestDist = dist
+						end
 					end
 				end
 			end
-			::continue_outer::
 		end
 		if best then return doBreak(best) end
 		return false
@@ -12907,39 +12937,39 @@ run(function()
 				local trackedSpecial = {tesla_trap={}, beehive={}, pinata={}, carrot={}, melon={}, pumpkin={}, snow_pile={}} 
 				local _trackedNames = {tesla_trap = true, beehive = true, pinata = true, carrot = true, melon = true, pumpkin = true, snow_pile = true}
 
-			local function trackAdd(obj)
-				if not _trackedNames[obj.Name] then return end
-				local t = trackedSpecial[obj.Name]
-				if not t then return end
-				if obj:IsA('BasePart') then
-					table.insert(t, obj)
-				elseif obj:IsA('Model') then
-					local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart')
-					if part then table.insert(t, part) end
-				end
-			end
-
-			local function trackRemove(obj)
-				if not _trackedNames[obj.Name] then return end
-				local t = trackedSpecial[obj.Name]
-				if t then
+				local function trackAdd(obj)
+					if not _trackedNames[obj.Name] then return end
+					local t = trackedSpecial[obj.Name]
+					if not t then return end
 					if obj:IsA('BasePart') then
-						local i = table.find(t, obj)
-						if i then table.remove(t, i) end
+						table.insert(t, obj)
 					elseif obj:IsA('Model') then
 						local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart')
-						if part then
-							local i = table.find(t, part)
-							if i then table.remove(t, i) end
-						end
+						if part then table.insert(t, part) end
 					end
 				end
-				breakabilityCache[obj] = nil
-			end
 
-			for _, obj in workspace:GetDescendants() do trackAdd(obj) end
-			Breaker:Clean(workspace.DescendantAdded:Connect(trackAdd))
-			Breaker:Clean(workspace.DescendantRemoving:Connect(trackRemove))
+				local function trackRemove(obj)
+					if not _trackedNames[obj.Name] then return end
+					local t = trackedSpecial[obj.Name]
+					if t then
+						if obj:IsA('BasePart') then
+							local i = table.find(t, obj)
+							if i then table.remove(t, i) end
+						elseif obj:IsA('Model') then
+							local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA('BasePart')
+							if part then
+								local i = table.find(t, part)
+								if i then table.remove(t, i) end
+							end
+						end
+					end
+					breakabilityCache[obj] = nil
+				end
+
+				for _, obj in workspace:GetDescendants() do trackAdd(obj) end
+				Breaker:Clean(workspace.DescendantAdded:Connect(trackAdd))
+				Breaker:Clean(workspace.DescendantRemoving:Connect(trackRemove))
 
 				local lockedPathBlock = nil
 				repeat
@@ -12975,23 +13005,21 @@ run(function()
 									if not cachedIsBreakable(v) then continue end
 								end
 								-- New: wall check inside main eval
-								if WallCheck and WallCheck.Enabled then
-									if not hasLineOfSight(v) then
-										-- If the candidate is a bed, attempt to find the blocking placed block and target that instead
-										if v.Name == 'bed' then
-											local blocker = findBlockingPlacedBlock(v)
-											if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
-												local bdist = (blocker.Position - localPosition).Magnitude
-												if bdist < bestDist and bdist < Range.Value then
-													best = blocker
-													bestDist = bdist
-												end
+								if WallCheck and WallCheck.Enabled and not hasLineOfSight(v) then
+									-- If the candidate is a bed, attempt to find the blocking placed block and target that instead
+									if v.Name == 'bed' then
+										local blocker = findBlockingPlacedBlock(v)
+										if blocker and blocker.Parent and cachedIsBreakable(blocker) and passesChecks(blocker) then
+											local bdist = (blocker.Position - localPosition).Magnitude
+											if bdist < bestDist and bdist < Range.Value then
+												best = blocker
+												bestDist = bdist
 											end
 										end
-										-- otherwise skip non-visible candidates
-										if best == nil then
-											continue
-										end
+									end
+									-- otherwise skip non-visible candidates
+									if best == nil then
+										continue
 									end
 								end
 								if not passesChecks(v) then continue end
@@ -13237,7 +13265,6 @@ run(function()
 		end
 	end)
 end)
-
 																																
 run(function()
 	local FPSBoost
