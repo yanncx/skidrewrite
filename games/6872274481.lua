@@ -45464,164 +45464,91 @@ Crasher1 = vape.Categories.Minigames:CreateModule({
     Tooltip = 'FishFound crasher (studio / testing)',
 })
 
--- AntiFisherCrash: standalone vape module that blocks/sanitizes FishFound client events
--- Place alongside your other vape modules (requires exploit env: getconnections, hookfunction, restorefunction).
+-- AntiFisherCrash: client-side vape module to protect against malicious FishFound payloads
+-- Place alongside your other vape modules and enable via vape the same way you do other anti-crash modules.
 
 local replicatedStorage = game:GetService("ReplicatedStorage")
 
--- CONFIG
-local BLOCK_ALL = true        -- if true, swallow ALL FishFound events for this client; if false, sanitize/allow safe payloads
-local NUM_THRESHOLD = 1e7     -- numbers or vector components above this are considered malicious
+-- Adjust threshold if needed
+local NUM_THRESHOLD = 1e7
 
-local hooked = {}             -- map original handler function -> original closure (for restore)
-local hookedConnects = {}     -- map event -> original Connect function (for restore)
+local hooked = {} -- map: originalFunc -> originalClosure (value stored for bookkeeping)
+local DESTROYED = {} -- remember instances we've attempted to destroy (best-effort)
 
-local function is_large_number(n)
+local function is_malicious_number(n)
     return type(n) == "number" and (n ~= n or math.abs(n) > NUM_THRESHOLD) -- NaN or huge
 end
 
-local function sanitize_value(v)
-    local t = typeof(v)
-    if t == "number" then
-        if is_large_number(v) then
-            return 0, true
-        end
-        return v, false
-    elseif t == "Vector3" then
-        local x,y,z = v.X, v.Y, v.Z
-        if is_large_number(x) or is_large_number(y) or is_large_number(z) then
-            return Vector3.new(0,0,0), true
-        end
-        return v, false
-    elseif t == "Instance" then
-        return nil, true
-    elseif t == "table" then
-        local changed = false
-        local copy = {}
-        for k, val in pairs(v) do
-            local sk, ck = sanitize_value(k)
-            local sv, cv = sanitize_value(val)
-            if ck or cv then changed = true end
-            if sk ~= nil then copy[sk] = sv end
-        end
-        if changed then
-            return copy, true
-        else
-            return v, false
-        end
-    else
-        return v, false
-    end
+local function is_malicious_vector3(v)
+    if typeof(v) ~= "Vector3" then return false end
+    return is_malicious_number(v.X) or is_malicious_number(v.Y) or is_malicious_number(v.Z)
 end
 
-local function sanitize_args(argTable)
-    local sanitized = {}
-    local anyBad = false
-    for i = 1, #argTable do
-        local v = argTable[i]
-        local sv, changed = sanitize_value(v)
-        sanitized[i] = sv
-        if changed then anyBad = true end
+local function contains_malicious_value(v, seen)
+    seen = seen or {}
+    if v == nil then return false end
+    local t = typeof(v)
+    if t == "number" then
+        return is_malicious_number(v)
+    elseif t == "Vector3" then
+        return is_malicious_vector3(v)
+    elseif t == "Instance" then
+        return true
+    elseif t == "table" then
+        if seen[v] then return false end
+        seen[v] = true
+        for k, val in pairs(v) do
+            if contains_malicious_value(k, seen) or contains_malicious_value(val, seen) then
+                return true
+            end
+        end
+        return false
     end
-    return sanitized, anyBad
+    return false
+end
+
+local function try_destroy_instances_in_value(v, seen)
+    seen = seen or {}
+    local t = typeof(v)
+    if t == "Instance" then
+        if not DESTROYED[v] then
+            pcall(function() v:Destroy() end)
+            DESTROYED[v] = true
+        end
+    elseif t == "table" then
+        if seen[v] then return end
+        seen[v] = true
+        for _, val in pairs(v) do
+            try_destroy_instances_in_value(val, seen)
+        end
+    end
 end
 
 local function hookConnection(connection)
-    if not connection or not connection.Function then return end
+    if not connection then return end
     local func = connection.Function
-    if hooked[func] then return end
+    if not func or hooked[func] then return end
 
     local ok, err = pcall(function()
         local old = hookfunction(func, newcclosure(function(...)
-            -- sanitize the arguments passed to the handler
+            -- inspect all args passed to the handler
             local args = {...}
-            local sanitized, anyBad = sanitize_args(args)
-
-            if BLOCK_ALL then
-                -- swallow everything
-                return
-            end
-
-            if anyBad then
-                -- attempt to destroy Instances inside payload (best-effort)
-                pcall(function()
-                    local function destroyRec(t)
-                        if typeof(t) ~= "table" then return end
-                        for _, val in pairs(t) do
-                            if typeof(val) == "Instance" and val.Destroy then
-                                pcall(function() val:Destroy() end)
-                            elseif typeof(val) == "table" then
-                                destroyRec(val)
-                            end
-                        end
-                    end
-                    destroyRec(args)
-                end)
-                -- swallow the call to prevent crash propagation
-                return
-            end
-
-            -- call original with sanitized args (unpack sanitized to preserve order)
-            return old(table.unpack(sanitized, 1, math.max(#sanitized, select("#", ...))))
-        end))
-        hooked[func] = old
-    end)
-    if not ok then
-        warn("AntiFisherCrash: hookConnection failed:", err)
-    end
-end
-
-local function hookExistingConnections(event)
-    if not event or not event.OnClientEvent then return end
-    if not getconnections then
-        warn("AntiFisherCrash: getconnections not available.")
-        return
-    end
-
-    for _, conn in pairs(getconnections(event.OnClientEvent)) do
-        pcall(hookConnection, conn)
-    end
-end
-
-local function hookConnectMethod(event)
-    if not event or not event.OnClientEvent then return end
-    local connectFn = event.OnClientEvent.Connect
-    if not connectFn or hookedConnects[event] then return end
-
-    local ok, err = pcall(function()
-        local old = hookfunction(connectFn, newcclosure(function(self, func)
-            -- wrap any newly provided handler so it goes through our sanitizer/blocker
-            local wrapped = function(...)
-                local args = {...}
-                local sanitized, anyBad = sanitize_args(args)
-                if BLOCK_ALL then
+            for i = 1, #args do
+                if contains_malicious_value(args[i]) then
+                    -- neutralize instances (best-effort) and swallow the call to avoid crash
+                    pcall(function() try_destroy_instances_in_value(args[i]) end)
                     return
                 end
-                if anyBad then
-                    -- attempt to neutralize Instances
-                    pcall(function()
-                        local function destroyRec(t)
-                            if typeof(t) ~= "table" then return end
-                            for _, val in pairs(t) do
-                                if typeof(val) == "Instance" and val.Destroy then
-                                    pcall(function() val:Destroy() end)
-                                elseif typeof(val) == "table" then
-                                    destroyRec(val)
-                                end
-                            end
-                        end
-                        destroyRec(args)
-                    end)
-                    return
-                end
-                return func(table.unpack(sanitized, 1, math.max(#sanitized, select("#", ...))))
             end
-            return old(self, wrapped)
+            -- safe: call original
+            return old(...)
         end))
-        hookedConnects[event] = old
+        -- store original (old) for bookkeeping/restore if desired
+        hooked[func] = true
     end)
+
     if not ok then
-        warn("AntiFisherCrash: hookConnectMethod failed:", err)
+        warn("AntiFisherCrash: failed to hook connection:", err)
     end
 end
 
@@ -45630,7 +45557,7 @@ AntiFisherCrash = vape.Categories.Minigames:CreateModule({
     Function = function(callback)
         if callback then
             local ok, err = pcall(function()
-                -- prefer exact rbxts path if present
+                -- Try the common rbxts-managed path first, otherwise find recursively
                 local event
                 local success, nodeEvent = pcall(function()
                     return replicatedStorage:WaitForChild("rbxts_include")
@@ -45648,29 +45575,32 @@ AntiFisherCrash = vape.Categories.Minigames:CreateModule({
                 end
 
                 if not event or not event:IsA("RemoteEvent") then
-                    warn("AntiFisherCrash: FishFound RemoteEvent not found.")
+                    warn("AntiFisherCrash: Could not locate FishFound RemoteEvent.")
                     return
                 end
 
-                hookExistingConnections(event)
-                hookConnectMethod(event)
+                if not getconnections then
+                    warn("AntiFisherCrash: getconnections not available in this environment; cannot hook handlers.")
+                    return
+                end
+
+                for _, conn in pairs(getconnections(event.OnClientEvent)) do
+                    pcall(hookConnection, conn)
+                end
             end)
             if not ok then
                 warn("AntiFisherCrash init failed:", err)
             end
         else
-            -- restore hooked handler functions
-            for func, old in pairs(hooked) do
-                pcall(function() restorefunction(func) end)
+            -- restore hooked functions
+            for func, _ in pairs(hooked) do
+                pcall(function()
+                    restorefunction(func)
+                end)
             end
             table.clear(hooked)
-
-            -- restore Connect methods
-            for event, old in pairs(hookedConnects) do
-                pcall(function() hookfunction(event.OnClientEvent.Connect, old) end)
-            end
-            table.clear(hookedConnects)
+            table.clear(DESTROYED)
         end
     end,
-    Tooltip = "Blocks/sanitizes FishFound event to prevent client crashes",
+    Tooltip = "Protects against malicious FishFound payloads (client-side)",
 })
