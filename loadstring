@@ -1,1 +1,1 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/skidrewrite/skidrewrite/main/NewMainScript.lua", true))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/yanncx/skidrewrite/main/NewMainScript.lua", true))()
